@@ -1,0 +1,30 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# R
+.Rhistory
+.RData
+.Rproj.user/
+renv/library/
+packrat/lib*/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+slurm_logs/
+*.out
+*.err
+
+# Archives
+*.tar.gz
+*.zip
+*.7z
+
+# Large raw outputs: do not store in regular Git
+results/**/monte_carlo_raw_all.csv
+results/**/monte_carlo_raw_all.rds
+results/**/raw_by_scenario/
+results/**/bootstrap/*_raw*.csv
+large_results/
