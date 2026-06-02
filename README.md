@@ -22,3 +22,19 @@ This archive contains scripts, data, selected numerical results, tables, figures
 The full raw Monte Carlo outputs are not included in this small archive. They are packaged separately in the large raw-results archive.
 
 Created on: Mon  1 Jun 05:19:22 WEST 2026
+
+## Real-data application: rhDNase
+
+The real-data application uses the public `rhDNase` dataset from the R package `survival`. The analysis constructs two sequential pulmonary-exacerbation gap times on accumulated at-risk time and estimates the normalized truncated Kendall association at the primary truncation level \(H=155\).
+
+Main files:
+
+- `scripts/realdata/realdata_rhDNase_tauH_application.R`
+- `scripts/slurm/run_realdata_rhDNase_tauH.sbatch`
+- `scripts/slurm/submit_realdata_rhDNase_tauH.sh`
+- `scripts/checks/check_rhDNase_application_outputs.R`
+- `results/realdata/rhDNase/tables/rhDNase_main_estimates_with_bootstrap.csv`
+- `results/realdata/rhDNase/bootstrap/rhDNase_bootstrap_summary.csv`
+- `figures/realdata/rhDNase_tauH_estimates_bootstrap_CI.png`
+
+The final archived run is `rhDNase_final_20260602_055047`, based on 2000 subject-level bootstrap resamples. The consistency checker reported no red flags.

@@ -1,0 +1,13 @@
+2026-06-02 05:50:57 | Starting rhDNase real-data application 
+2026-06-02 05:50:57 | Output directory: /projects/F202500010HPCVLABUMINHO/cecilia/tauH_simulation/results_realdata_rhDNase_tauH/rhDNase_final_20260602_055047 
+2026-06-02 05:50:57 | Bootstrap replicates: 2000 cores: 64 
+2026-06-02 05:50:58 | Loaded rhDNase data from survival package. 
+2026-06-02 05:50:58 | Raw rhDNase rows:  767 ; unique subjects:  647 
+2026-06-02 05:50:58 | Constructed subject-level rhDNase at-risk gap data. 
+2026-06-02 05:50:58 | Subjects retained:  645 
+2026-06-02 05:50:58 | Delta1 observed:  243 
+2026-06-02 05:50:58 | Delta2 observed:  81 
+2026-06-02 05:51:00 | Starting bootstrap with 2000 replicates and 64 cores 
+2026-06-02 05:51:25 | Completed rhDNase real-data application 
+2026-06-02 05:51:25 | Key output table: /projects/F202500010HPCVLABUMINHO/cecilia/tauH_simulation/results_realdata_rhDNase_tauH/rhDNase_final_20260602_055047/tables/rhDNase_main_estimates_with_bootstrap.csv 
+2026-06-02 05:51:25 | Key bootstrap table: /projects/F202500010HPCVLABUMINHO/cecilia/tauH_simulation/results_realdata_rhDNase_tauH/rhDNase_final_20260602_055047/bootstrap/rhDNase_bootstrap_summary.csv 
