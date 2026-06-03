@@ -245,20 +245,42 @@ psi_matrix <- function(A, B) {
   sign(DA * DB)
 }
 
-tau_from_weights <- function(A, B, weights, H) {
-  I <- as.numeric(A + B <= H)
-  ww <- weights * I
-  # Defensive handling of non-finite tau weights.
-  ww <- as.numeric(ww)
+tau_from_weights <- function(A, B, weights, H, I = NULL) {
+  if (is.null(I)) {
+    I <- as.numeric(A + B <= H)
+  } else {
+    I <- as.numeric(I)
+  }
+  I[!is.finite(I)] <- 0
+
+  ww <- as.numeric(weights) * I
   ww[!is.finite(ww)] <- 0
+
   M <- sum(ww, na.rm = TRUE)
   if (!is.finite(M) || M <= 1e-12) {
-    return(list(tau = NA_real_, M_hat = M, ess = NA_real_, sum_weights = sum(weights, na.rm = TRUE)))
+    return(list(
+      tau = NA_real_,
+      M_hat = M,
+      ess = NA_real_,
+      sum_weights = sum(weights, na.rm = TRUE)
+    ))
   }
+
   P <- psi_matrix(A, B)
   tau <- sum(outer(ww, ww) * P, na.rm = TRUE) / (M * M)
-  ess <- if (sum(ww^2) > 0) M^2 / sum(ww^2) else NA_real_
-  list(tau = tau, M_hat = M, ess = ess, sum_weights = sum(weights, na.rm = TRUE))
+
+  ess <- if (sum(ww^2, na.rm = TRUE) > 0) {
+    M^2 / sum(ww^2, na.rm = TRUE)
+  } else {
+    NA_real_
+  }
+
+  list(
+    tau = tau,
+    M_hat = M,
+    ess = ess,
+    sum_weights = sum(weights, na.rm = TRUE)
+  )
 }
 
 # -----------------------------------------------------------------------------
@@ -404,89 +426,24 @@ cox_censor_surv <- function(dat) {
 # -----------------------------------------------------------------------------
 # Estimation wrapper
 # -----------------------------------------------------------------------------
-estimate_methods <- function(dat, H, seed = CONFIG$SEED, compute_diag = TRUE) {
+estimate_methods <- function(dat, H, seed = CONFIG$SEED,
+                             compute_diag = TRUE) {
   lib <- mhat_library(dat, CONFIG$K_FOLDS, seed)
+
   m_const <- lib$preds$constant
   m_marg <- lib$preds$marg_logit
   m_xlogit <- lib$preds$x_logit
   m_xspline <- lib$preds$x_spline
   m_sl <- lib$ensemble
 
-  methods <- list()
-  methods$trad <- pl_weights(dat$Z_tilde, dat$Delta2, dat$Delta2)
-  methods$ps_marg_logit <- pl_weights(dat$Z_tilde, dat$Delta1 * m_marg, dat$Delta2)
-  methods$ps_x_logit <- pl_weights(dat$Z_tilde, dat$Delta1 * m_xlogit, dat$Delta2)
-  methods$ps_x_spline <- pl_weights(dat$Z_tilde, dat$Delta1 * m_xspline, dat$Delta2)
-  for (lam in c(CONFIG$MAIN_LAMBDAS, 1.0)) {
-    nm <- paste0("scap_x_l", sprintf("%03.0f", 100 * lam))
-    escore <- dat$Delta1 * ((1 - lam) * dat$Delta2 + lam * m_sl)
-    methods[[nm]] <- pl_weights(dat$Z_tilde, escore, dat$Delta2)
-  }
+  A_eval <- dat$A_tilde
+  B_eval <- dat$Z_tilde - dat$A_tilde
+  B_eval[!is.finite(B_eval)] <- 0
 
-  Gm <- km_surv_at(dat$Z_tilde, as.integer(dat$Delta2 == 0), dat$Z_tilde)
-  Gx <- cox_censor_surv(dat)
-  I <- as.numeric(dat$A + dat$B <= H)
-  v_m <- dat$Delta2 * I / Gm
-  v_x <- dat$Delta2 * I / Gx
-
-  res <- lapply(names(methods), function(nm) {
-    z <- tau_from_weights(dat$A, dat$B, methods[[nm]], H)
-    data.frame(method = nm, tau_H = z$tau, M_hat = z$M_hat, ess = z$ess,
-               sum_weights = z$sum_weights, H = H)
-  })
-
-  tau_ipcw <- function(v) {
-    M <- sum(v, na.rm = TRUE)
-    if (!is.finite(M) || M <= 1e-12) return(list(tau = NA_real_, M_hat = NA_real_, ess = NA_real_))
-    P <- psi_matrix(dat$A, dat$B)
-    tau <- sum(outer(v, v) * P, na.rm = TRUE) / (M * M)
-    ess <- if (sum(v^2) > 0) M^2 / sum(v^2) else NA_real_
-    list(tau = tau, M_hat = mean(v, na.rm = TRUE), ess = ess)
-  }
-  zi <- tau_ipcw(v_m)
-  res[[length(res) + 1]] <- data.frame(method = "ipcw_marg", tau_H = zi$tau, M_hat = zi$M_hat,
-                                       ess = zi$ess, sum_weights = sum(v_m), H = H)
-  zi <- tau_ipcw(v_x)
-  res[[length(res) + 1]] <- data.frame(method = "ipcw_x", tau_H = zi$tau, M_hat = zi$M_hat,
-                                       ess = zi$ess, sum_weights = sum(v_x), H = H)
-  est <- do.call(rbind, res)
-
-  if (compute_diag) {
-    idx <- dat$Delta1 == 1
-    nuis <- lib$diagnostics
-    nuis$n_train_observable <- sum(idx)
-    nuis$event_rate_Delta2_given_Delta1 <- mean(dat$Delta2[idx], na.rm = TRUE)
-    wdiag <- data.frame(
-      method = est$method,
-      H = H,
-      M_hat = est$M_hat,
-      ess = est$ess,
-      sum_weights = est$sum_weights
-    )
-    return(list(estimates = est, nuisance = nuis, weights = wdiag,
-                mhat = data.frame(id = dat$id, Delta1 = dat$Delta1, Delta2 = dat$Delta2,
-                                  A_tilde = dat$A_tilde, Z_tilde = dat$Z_tilde,
-                                  m_constant = m_const, m_marg_logit = m_marg,
-                                  m_x_logit = m_xlogit, m_x_spline = m_xspline,
-                                  m_ensemble = m_sl,
-                                  G_marg = Gm, G_x = Gx)))
-  }
-  list(estimates = est)
-}
-
-
-estimate_methods_fixed_nuisance <- function(dat, H, nuisance_df) {
-  # Sensitivity analyses should vary only H or lambda, not the nuisance fits.
-  # This function reuses the nuisance predictions fitted in the main analysis.
-
-  if (nrow(nuisance_df) != nrow(dat)) {
-    stop("Fixed nuisance data frame has incompatible number of rows.")
-  }
-
-  m_marg <- clip01(nuisance_df$m_marg_logit)
-  m_xlogit <- clip01(nuisance_df$m_x_logit)
-  m_xspline <- clip01(nuisance_df$m_x_spline)
-  m_sl <- clip01(nuisance_df$m_ensemble)
+  I_star <- as.numeric(dat$Delta1 == 1 &
+                         is.finite(dat$Z_tilde) &
+                         dat$Z_tilde <= H)
+  I_star[!is.finite(I_star)] <- 0
 
   methods <- list()
   methods$trad <- pl_weights(dat$Z_tilde, dat$Delta2, dat$Delta2)
@@ -494,14 +451,18 @@ estimate_methods_fixed_nuisance <- function(dat, H, nuisance_df) {
   methods$ps_x_logit <- pl_weights(dat$Z_tilde, dat$Delta1 * m_xlogit, dat$Delta2)
   methods$ps_x_spline <- pl_weights(dat$Z_tilde, dat$Delta1 * m_xspline, dat$Delta2)
 
-  for (lam in c(CONFIG$MAIN_LAMBDAS, 1.0)) {
+  for (lam in c(CONFIG$MAIN_LAMBDAS, 1)) {
     nm <- paste0("scap_x_l", sprintf("%03.0f", 100 * lam))
     escore <- dat$Delta1 * ((1 - lam) * dat$Delta2 + lam * m_sl)
     methods[[nm]] <- pl_weights(dat$Z_tilde, escore, dat$Delta2)
   }
 
+  Gm <- pmax(km_surv_at(dat$Z_tilde, as.integer(dat$Delta2 == 0), dat$Z_tilde),
+             CONFIG$IPCW_TRUNC)
+  Gx <- pmax(cox_censor_surv(dat), CONFIG$IPCW_TRUNC)
+
   res <- lapply(names(methods), function(nm) {
-    z <- tau_from_weights(dat$A, dat$B, methods[[nm]], H)
+    z <- tau_from_weights(A_eval, B_eval, methods[[nm]], H, I = I_star)
     data.frame(
       method = nm,
       tau_H = z$tau,
@@ -512,23 +473,29 @@ estimate_methods_fixed_nuisance <- function(dat, H, nuisance_df) {
     )
   })
 
-  Gm <- pmax(as.numeric(nuisance_df$G_marg), CONFIG$IPCW_TRUNC)
-  Gx <- pmax(as.numeric(nuisance_df$G_x), CONFIG$IPCW_TRUNC)
-
-  I <- as.numeric(dat$A + dat$B <= H)
-  v_m <- dat$Delta2 * I / Gm
-  v_x <- dat$Delta2 * I / Gx
-
   tau_ipcw <- function(v) {
+    v <- as.numeric(v)
+    v[!is.finite(v)] <- 0
+
     M <- sum(v, na.rm = TRUE)
     if (!is.finite(M) || M <= 1e-12) {
       return(list(tau = NA_real_, M_hat = NA_real_, ess = NA_real_))
     }
-    P <- psi_matrix(dat$A, dat$B)
+
+    P <- psi_matrix(A_eval, B_eval)
     tau <- sum(outer(v, v) * P, na.rm = TRUE) / (M * M)
-    ess <- if (sum(v^2) > 0) M^2 / sum(v^2) else NA_real_
+
+    ess <- if (sum(v^2, na.rm = TRUE) > 0) {
+      M^2 / sum(v^2, na.rm = TRUE)
+    } else {
+      NA_real_
+    }
+
     list(tau = tau, M_hat = mean(v, na.rm = TRUE), ess = ess)
   }
+
+  v_m <- dat$Delta2 * I_star / Gm
+  v_x <- dat$Delta2 * I_star / Gx
 
   zi <- tau_ipcw(v_m)
   res[[length(res) + 1L]] <- data.frame(
@@ -550,41 +517,225 @@ estimate_methods_fixed_nuisance <- function(dat, H, nuisance_df) {
     H = H
   )
 
+  for (lam in c(0.50, 1.00)) {
+    escore <- dat$Delta1 * ((1 - lam) * dat$Delta2 + lam * m_sl)
+    escore[!is.finite(escore)] <- 0
+
+    v_gscap <- escore * I_star / Gx
+    v_gscap[!is.finite(v_gscap)] <- 0
+
+    zi <- tau_ipcw(v_gscap)
+    res[[length(res) + 1L]] <- data.frame(
+      method = paste0("gscap_x_l", sprintf("%03.0f", 100 * lam)),
+      tau_H = zi$tau,
+      M_hat = zi$M_hat,
+      ess = zi$ess,
+      sum_weights = sum(v_gscap, na.rm = TRUE),
+      H = H
+    )
+  }
+
+  est <- do.call(rbind, res)
+
+  if (compute_diag) {
+    idx <- dat$Delta1 == 1
+
+    nuis <- lib$diagnostics
+    nuis$n_train_observable <- sum(idx)
+    nuis$event_rate_Delta2_given_Delta1 <- mean(dat$Delta2[idx], na.rm = TRUE)
+
+    wdiag <- data.frame(
+      method = est$method,
+      H = H,
+      M_hat = est$M_hat,
+      ess = est$ess,
+      sum_weights = est$sum_weights
+    )
+
+    return(list(
+      estimates = est,
+      nuisance = nuis,
+      weights = wdiag,
+      mhat = data.frame(
+        id = dat$id,
+        Delta1 = dat$Delta1,
+        Delta2 = dat$Delta2,
+        A_tilde = dat$A_tilde,
+        Z_tilde = dat$Z_tilde,
+        m_constant = m_const,
+        m_marg_logit = m_marg,
+        m_x_logit = m_xlogit,
+        m_x_spline = m_xspline,
+        m_ensemble = m_sl,
+        G_marg = Gm,
+        G_x = Gx
+      )
+    ))
+  }
+
+  list(estimates = est)
+}
+
+
+estimate_methods_fixed_nuisance <- function(dat, H, nuisance_df) {
+  if (nrow(nuisance_df) != nrow(dat)) {
+    stop("Fixed nuisance data frame has incompatible number of rows.")
+  }
+
+  m_marg <- clip01(nuisance_df$m_marg_logit)
+  m_xlogit <- clip01(nuisance_df$m_x_logit)
+  m_xspline <- clip01(nuisance_df$m_x_spline)
+  m_sl <- clip01(nuisance_df$m_ensemble)
+
+  A_eval <- dat$A_tilde
+  B_eval <- dat$Z_tilde - dat$A_tilde
+  B_eval[!is.finite(B_eval)] <- 0
+
+  I_star <- as.numeric(dat$Delta1 == 1 &
+                         is.finite(dat$Z_tilde) &
+                         dat$Z_tilde <= H)
+  I_star[!is.finite(I_star)] <- 0
+
+  methods <- list()
+  methods$trad <- pl_weights(dat$Z_tilde, dat$Delta2, dat$Delta2)
+  methods$ps_marg_logit <- pl_weights(dat$Z_tilde, dat$Delta1 * m_marg, dat$Delta2)
+  methods$ps_x_logit <- pl_weights(dat$Z_tilde, dat$Delta1 * m_xlogit, dat$Delta2)
+  methods$ps_x_spline <- pl_weights(dat$Z_tilde, dat$Delta1 * m_xspline, dat$Delta2)
+
+  for (lam in c(CONFIG$MAIN_LAMBDAS, 1)) {
+    nm <- paste0("scap_x_l", sprintf("%03.0f", 100 * lam))
+    escore <- dat$Delta1 * ((1 - lam) * dat$Delta2 + lam * m_sl)
+    methods[[nm]] <- pl_weights(dat$Z_tilde, escore, dat$Delta2)
+  }
+
+  res <- lapply(names(methods), function(nm) {
+    z <- tau_from_weights(A_eval, B_eval, methods[[nm]], H, I = I_star)
+    data.frame(
+      method = nm,
+      tau_H = z$tau,
+      M_hat = z$M_hat,
+      ess = z$ess,
+      sum_weights = z$sum_weights,
+      H = H
+    )
+  })
+
+  Gm <- pmax(as.numeric(nuisance_df$G_marg), CONFIG$IPCW_TRUNC)
+  Gx <- pmax(as.numeric(nuisance_df$G_x), CONFIG$IPCW_TRUNC)
+
+  tau_ipcw <- function(v) {
+    v <- as.numeric(v)
+    v[!is.finite(v)] <- 0
+
+    M <- sum(v, na.rm = TRUE)
+    if (!is.finite(M) || M <= 1e-12) {
+      return(list(tau = NA_real_, M_hat = NA_real_, ess = NA_real_))
+    }
+
+    P <- psi_matrix(A_eval, B_eval)
+    tau <- sum(outer(v, v) * P, na.rm = TRUE) / (M * M)
+
+    ess <- if (sum(v^2, na.rm = TRUE) > 0) {
+      M^2 / sum(v^2, na.rm = TRUE)
+    } else {
+      NA_real_
+    }
+
+    list(tau = tau, M_hat = mean(v, na.rm = TRUE), ess = ess)
+  }
+
+  v_m <- dat$Delta2 * I_star / Gm
+  v_x <- dat$Delta2 * I_star / Gx
+
+  zi <- tau_ipcw(v_m)
+  res[[length(res) + 1L]] <- data.frame(
+    method = "ipcw_marg",
+    tau_H = zi$tau,
+    M_hat = zi$M_hat,
+    ess = zi$ess,
+    sum_weights = sum(v_m, na.rm = TRUE),
+    H = H
+  )
+
+  zi <- tau_ipcw(v_x)
+  res[[length(res) + 1L]] <- data.frame(
+    method = "ipcw_x",
+    tau_H = zi$tau,
+    M_hat = zi$M_hat,
+    ess = zi$ess,
+    sum_weights = sum(v_x, na.rm = TRUE),
+    H = H
+  )
+
+  for (lam in c(0.50, 1.00)) {
+    escore <- dat$Delta1 * ((1 - lam) * dat$Delta2 + lam * m_sl)
+    escore[!is.finite(escore)] <- 0
+
+    v_gscap <- escore * I_star / Gx
+    v_gscap[!is.finite(v_gscap)] <- 0
+
+    zi <- tau_ipcw(v_gscap)
+    res[[length(res) + 1L]] <- data.frame(
+      method = paste0("gscap_x_l", sprintf("%03.0f", 100 * lam)),
+      tau_H = zi$tau,
+      M_hat = zi$M_hat,
+      ess = zi$ess,
+      sum_weights = sum(v_gscap, na.rm = TRUE),
+      H = H
+    )
+  }
+
   list(estimates = do.call(rbind, res))
 }
 
-estimate_lambda_grid_fixed_nuisance <- function(dat, H, nuisance_df, lambdas) {
+estimate_lambda_grid_fixed_nuisance <- function(dat, H,
+                                                 nuisance_df, lambdas) {
   if (nrow(nuisance_df) != nrow(dat)) {
     stop("Fixed nuisance data frame has incompatible number of rows.")
   }
 
   m_sl <- clip01(nuisance_df$m_ensemble)
 
+  A_eval <- dat$A_tilde
+  B_eval <- dat$Z_tilde - dat$A_tilde
+  B_eval[!is.finite(B_eval)] <- 0
+
+  I_star <- as.numeric(dat$Delta1 == 1 &
+                         is.finite(dat$Z_tilde) &
+                         dat$Z_tilde <= H)
+  I_star[!is.finite(I_star)] <- 0
+
   out <- lapply(lambdas, function(lam) {
     escore <- dat$Delta1 * ((1 - lam) * dat$Delta2 + lam * m_sl)
     w <- pl_weights(dat$Z_tilde, escore, dat$Delta2)
-    z <- tau_from_weights(dat$A, dat$B, w, H)
-    data.frame(
-      lambda = lam,
-      tau_H = z$tau,
-      M_hat = z$M_hat,
-      ess = z$ess,
-      H = H
-    )
+    z <- tau_from_weights(A_eval, B_eval, w, H, I = I_star)
+    data.frame(lambda = lam, tau_H = z$tau, M_hat = z$M_hat, ess = z$ess, H = H)
   })
 
   do.call(rbind, out)
 }
 
-estimate_lambda_grid <- function(dat, H, lambdas = CONFIG$LAMBDA_GRID, seed = CONFIG$SEED + 999) {
+estimate_lambda_grid <- function(dat, H, lambdas = CONFIG$LAMBDA_GRID,
+                                 seed = CONFIG$SEED + 999) {
   lib <- mhat_library(dat, CONFIG$K_FOLDS, seed)
   m_sl <- lib$ensemble
+
+  A_eval <- dat$A_tilde
+  B_eval <- dat$Z_tilde - dat$A_tilde
+  B_eval[!is.finite(B_eval)] <- 0
+
+  I_star <- as.numeric(dat$Delta1 == 1 &
+                         is.finite(dat$Z_tilde) &
+                         dat$Z_tilde <= H)
+  I_star[!is.finite(I_star)] <- 0
+
   out <- lapply(lambdas, function(lam) {
     escore <- dat$Delta1 * ((1 - lam) * dat$Delta2 + lam * m_sl)
     w <- pl_weights(dat$Z_tilde, escore, dat$Delta2)
-    z <- tau_from_weights(dat$A, dat$B, w, H)
+    z <- tau_from_weights(A_eval, B_eval, w, H, I = I_star)
     data.frame(lambda = lam, tau_H = z$tau, M_hat = z$M_hat, ess = z$ess, H = H)
   })
+
   do.call(rbind, out)
 }
 
@@ -758,9 +909,17 @@ H_sens <- lapply(seq_along(H_vals), function(j) {
 H_sens <- do.call(rbind, H_sens)
 
 keep_methods <- c(
-  "trad", "ipcw_marg", "ipcw_x",
-  "ps_marg_logit", "ps_x_logit", "ps_x_spline",
-  "scap_x_l050", "scap_x_l075", "scap_x_l100"
+  "trad",
+  "ipcw_marg",
+  "ipcw_x",
+  "gscap_x_l050",
+  "gscap_x_l100",
+  "ps_marg_logit",
+  "ps_x_logit",
+  "ps_x_spline",
+  "scap_x_l050",
+  "scap_x_l075",
+  "scap_x_l100"
 )
 
 H_sens <- H_sens[H_sens$method %in% keep_methods, , drop = FALSE]
@@ -779,7 +938,18 @@ lambda_sens <- lambda_sens[order(lambda_sens$lambda), , drop = FALSE]
 write_csv(lambda_sens, file.path(DIRS$tables, "rhDNase_sensitivity_lambda.csv"))
 
 # Bootstrap
-boot_methods <- c("trad", "ipcw_marg", "ipcw_x", "ps_marg_logit", "ps_x_logit", "ps_x_spline", "scap_x_l050", "scap_x_l075")
+boot_methods <- c(
+  "trad",
+  "ipcw_marg",
+  "ipcw_x",
+  "gscap_x_l050",
+  "gscap_x_l100",
+  "ps_marg_logit",
+  "ps_x_logit",
+  "ps_x_spline",
+  "scap_x_l050",
+  "scap_x_l075"
+)
 boot_raw <- run_bootstrap(kid, H_main, boot_methods, CONFIG$N_BOOT, CONFIG$MAX_CORES, CONFIG$SEED + 3000)
 write_csv(boot_raw, file.path(DIRS$bootstrap, "rhDNase_bootstrap_raw.csv"))
 boot_summary <- summarize_bootstrap(main_est[main_est$method %in% boot_methods, , drop = FALSE], boot_raw)

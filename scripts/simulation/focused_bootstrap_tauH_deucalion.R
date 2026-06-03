@@ -29,6 +29,8 @@ CONFIG$BOOT_METHODS <- c(
   "trad",
   "ipcw_marg",
   "ipcw_x",
+  "gscap_x_l050",
+  "gscap_x_l100",
   "ps_marg_logit",
   "ps_x_logit",
   "scap_x_l050",

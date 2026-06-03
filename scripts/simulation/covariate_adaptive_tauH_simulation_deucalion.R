@@ -43,6 +43,8 @@ CONFIG <- list(
     "trad",
     "ipcw_marg",
     "ipcw_x",
+    "gscap_x_l050",
+    "gscap_x_l100",
     "ps_marg_logit",
     "ps_x_logit",
     "ps_x_spline",
@@ -56,10 +58,10 @@ CONFIG <- list(
   ),
 
   # Smaller method set for bootstrap coverage because bootstrap is expensive.
-  BOOT_METHODS = c("trad", "ipcw_marg", "ipcw_x", "ps_x_spline", "scap_x_l050", "scap_x_l075"),
+  BOOT_METHODS = c("trad", "ipcw_marg", "ipcw_x", "gscap_x_l050", "gscap_x_l100", "ps_x_spline", "scap_x_l050", "scap_x_l075"),
 
   # Methods highlighted in figures.
-  PLOT_METHODS = c("trad", "ipcw_marg", "ipcw_x", "ps_marg_logit", "ps_x_spline", "scap_x_l050", "scap_x_l075"),
+  PLOT_METHODS = c("trad", "ipcw_marg", "ipcw_x", "gscap_x_l050", "gscap_x_l100", "ps_marg_logit", "ps_x_spline", "scap_x_l050", "scap_x_l075"),
 
   EPS_PROB = 0.01,
   K_FOLDS = 5L,
@@ -281,7 +283,7 @@ rbind_safe <- function(lst) {
 }
 
 method_uses_m <- function(method) {
-  grepl("^ps_", method) || grepl("^scap_", method)
+  grepl("^ps_", method) || grepl("^scap_", method) || grepl("^gscap_", method)
 }
 
 method_uses_x <- function(method) {
@@ -1086,12 +1088,54 @@ estimate_method <- function(df, H, method, seed = 1L) {
   } else if (grepl("^scap_x_l", method)) {
     fit <- fit_m_ensemble(df, include_x = TRUE, crossfit = TRUE, calibrate = TRUE, seed = seed)
     mhat <- fit$mhat; alpha <- fit$alpha
+  } else if (grepl("^gscap_x_l", method)) {
+    fit <- fit_m_ensemble(df, include_x = TRUE, crossfit = TRUE, calibrate = TRUE, seed = seed)
+    mhat <- fit$mhat; alpha <- fit$alpha
   } else {
     stop("Unknown method: ", method)
   }
 
   e <- df$d1 * ((1 - lambda) * df$d2 + lambda * mhat)
-  est <- estimate_tau_pl(df, H, e = e)
+
+  if (grepl("^gscap_x_l", method)) {
+    G <- predict_G_x_crossfit(df, seed = seed)
+    G <- clip_prob(G)
+
+    IH <- as.numeric(df$d1 == 1L &
+                     is.finite(df$Aobs) &
+                     is.finite(df$Bobs) &
+                     is.finite(df$Ztilde) &
+                     df$Ztilde <= H)
+
+    wH <- e * IH / G / nrow(df)
+    wH[!is.finite(wH)] <- 0
+
+    MH <- sum(wH, na.rm = TRUE)
+
+    if (!is.finite(MH) || MH <= 0) {
+      est <- list(
+        tau_hat = NA_real_,
+        numerator = NA_real_,
+        M_hat = MH,
+        sum_omega = sum(wH, na.rm = TRUE),
+        mean_G = mean(G, na.rm = TRUE)
+      )
+    } else {
+      num <- weighted_kendall_num_fast(df$Aobs, df$Bobs, wH)
+      tau <- max(-1, min(1, num / (MH^2)))
+      est <- list(
+        tau_hat = tau,
+        numerator = num,
+        M_hat = MH,
+        sum_omega = sum(wH, na.rm = TRUE),
+        mean_G = mean(G, na.rm = TRUE)
+      )
+    }
+
+    out_extra$mean_G <- est$mean_G
+  } else {
+    est <- estimate_tau_pl(df, H, e = e)
+  }
 
   if (length(ids) > 0L) {
     cm <- calibration_metrics(df$d2[ids], mhat[ids])

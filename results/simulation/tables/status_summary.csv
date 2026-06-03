@@ -1,4 +1,10 @@
 "block","method","status","N"
+"A_independent","gscap_x_l050","ok",48000
+"B_covariate_dependent","gscap_x_l050","ok",96000
+"C_nonlinear_observability","gscap_x_l050","ok",48000
+"A_independent","gscap_x_l100","ok",48000
+"B_covariate_dependent","gscap_x_l100","ok",96000
+"C_nonlinear_observability","gscap_x_l100","ok",48000
 "A_independent","ipcw_marg","ok",48000
 "B_covariate_dependent","ipcw_marg","ok",96000
 "C_nonlinear_observability","ipcw_marg","ok",48000
